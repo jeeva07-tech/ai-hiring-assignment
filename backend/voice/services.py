@@ -80,7 +80,7 @@ class HunarService:
         if request_id:
             payload["request_id"] = request_id
 
-        if callback_config:
+        if callback_config is not None:
             payload["callback_config"] = callback_config
 
         response = requests.post(

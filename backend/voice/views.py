@@ -95,20 +95,25 @@ class CreateHunarCallView(APIView):
                 "",
             ).rstrip("/")
 
-            callback_config = None
-
-            if webhook_base_url:
-                webhook_url = (
-                    f"{webhook_base_url}"
-                    "/api/voice/webhooks/hunar/"
+            if not webhook_base_url:
+                raise HunarAPIError(
+                    "HUNAR_WEBHOOK_BASE_URL is not configured."
                 )
 
-                callback_config = {
-                    "call_status_callback_url": webhook_url,
-                    "call_recording_callback_url": webhook_url,
-                    "call_result_callback_url": webhook_url,
-                    "call_summary_callback_url": webhook_url,
-                }
+            webhook_url =(
+                f"{webhook_base_url}"
+                "/api/voice/webhooks/hunar/"
+            )
+
+            
+            callback_config = {
+                "call_status_callback_url": webhook_url,
+                "call_recording_callback_url": webhook_url,
+                "call_result_callback_url": webhook_url,
+                "call_summary_callback_url": webhook_url,
+               }
+            print("HUNAR WEBHOOK URL:", webhook_url)
+            print("HUNAR CALLBACK CONFIG:", callback_config)
 
             # -------------------------------------------------
             # Create Hunar call
