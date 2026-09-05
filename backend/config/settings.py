@@ -105,14 +105,22 @@ DATABASES = {
     }
 }
 
-HUNAR_WEBHOOK_API_KEYS =[
+HUNAR_API_KEY = os.getenv("HUNAR_API_KEY")
+HUNAR_BASE_URL = os.getenv(
+    "HUNAR_BASE_URL",
+    "https://api.voice.hunar.ai/external/v1",
+)
+
+HUNAR_WEBHOOK_API_KEYS = [
     key.strip()
-    for key in os.getenv(
-        "HUNAR_WEBHOOK_API_KEYS",
-        "",
-    ).split(",")
+    for key in os.getenv("HUNAR_WEBHOOK_API_KEYS", "").split(",")
     if key.strip()
 ]
+
+HUNAR_WEBHOOK_BASE_URL = os.getenv(
+    "HUNAR_WEBHOOK_BASE_URL",
+    "",
+)
 
 
 # Password validation
