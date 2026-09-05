@@ -1,3 +1,7 @@
+import json
+
+from django.conf import settings
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 
 from rest_framework import status
@@ -7,13 +11,8 @@ from rest_framework.views import APIView
 from candidates.models import Candidate, Interview
 from hiring.models import Job
 
-from .services import HunarAPIError, HunarService
-
-import json
-
-from django.conf import settings
-from django.http import HttpResponse
 from .helpers import verify_hunar_webhook_signature
+from .services import HunarAPIError, HunarService
 
 
 class HunarAgentsView(APIView):
@@ -26,6 +25,7 @@ class HunarAgentsView(APIView):
     def get(self, request):
         try:
             service = HunarService()
+
             agents = service.list_agents()
 
             return Response(
@@ -79,10 +79,41 @@ class CreateHunarCallView(APIView):
         custom_data = request.data.get("custom_data") or {}
 
         # Get the job from PostgreSQL
-        job = get_object_or_404(Job, id=job_id)
+        job = get_object_or_404(
+            Job,
+            id=job_id,
+        )
 
         try:
-            # Create the Hunar call
+            # -------------------------------------------------
+            # Build Hunar webhook callback configuration
+            # -------------------------------------------------
+
+            webhook_base_url = getattr(
+                settings,
+                "HUNAR_WEBHOOK_BASE_URL",
+                "",
+            ).rstrip("/")
+
+            callback_config = None
+
+            if webhook_base_url:
+                webhook_url = (
+                    f"{webhook_base_url}"
+                    "/api/voice/webhooks/hunar/"
+                )
+
+                callback_config = {
+                    "call_status_callback_url": webhook_url,
+                    "call_recording_callback_url": webhook_url,
+                    "call_result_callback_url": webhook_url,
+                    "call_summary_callback_url": webhook_url,
+                }
+
+            # -------------------------------------------------
+            # Create Hunar call
+            # -------------------------------------------------
+
             service = HunarService()
 
             call = service.create_call(
@@ -90,24 +121,30 @@ class CreateHunarCallView(APIView):
                 callee_name=callee_name,
                 mobile_number=mobile_number,
                 custom_data=custom_data,
-                request_id=request.data.get("request_id"),
+                request_id=request.data.get(
+                    "request_id"
+                ),
                 timezone=request.data.get(
                     "timezone",
                     "Asia/Kolkata",
                 ),
-                callback_config=request.data.get(
-                    "callback_config"
-                ),
+                callback_config=callback_config,
             )
 
+            # -------------------------------------------------
             # Create candidate in PostgreSQL
+            # -------------------------------------------------
+
             candidate = Candidate.objects.create(
                 job=job,
                 name=callee_name,
                 mobile_number=mobile_number,
             )
 
+            # -------------------------------------------------
             # Create interview record
+            # -------------------------------------------------
+
             interview = Interview.objects.create(
                 candidate=candidate,
                 job=job,
@@ -127,7 +164,9 @@ class CreateHunarCallView(APIView):
 
             return Response(
                 {
-                    "message": "Hunar call created successfully.",
+                    "message": (
+                        "Hunar call created successfully."
+                    ),
                     "call": call,
                     "candidate": {
                         "id": candidate.id,
@@ -174,7 +213,7 @@ class HunarCallDetailView(APIView):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
-#Web hook
+
 class HunarWebhookView(APIView):
     """
     POST /api/voice/webhooks/hunar/
@@ -186,7 +225,15 @@ class HunarWebhookView(APIView):
     permission_classes = []
 
     def post(self, request):
+        # -------------------------------------------------
+        # Get raw request body
+        # -------------------------------------------------
+
         request_body = request.body
+
+        # -------------------------------------------------
+        # Get Hunar webhook security headers
+        # -------------------------------------------------
 
         signature = request.headers.get(
             "X-Hunar-Signature"
@@ -196,11 +243,19 @@ class HunarWebhookView(APIView):
             "X-Hunar-Timestamp"
         )
 
+        # -------------------------------------------------
+        # Get trusted API keys
+        # -------------------------------------------------
+
         trusted_api_keys = getattr(
             settings,
             "HUNAR_WEBHOOK_API_KEYS",
             [],
         )
+
+        # -------------------------------------------------
+        # Verify webhook signature
+        # -------------------------------------------------
 
         is_valid = verify_hunar_webhook_signature(
             signature_header=signature,
@@ -215,18 +270,35 @@ class HunarWebhookView(APIView):
                 status=401,
             )
 
+        # -------------------------------------------------
+        # Parse JSON
+        # -------------------------------------------------
+
         try:
             payload = json.loads(
                 request_body.decode("utf-8")
             )
-        except (json.JSONDecodeError, UnicodeDecodeError):
+
+        except (
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+        ):
             return HttpResponse(
                 "Invalid JSON",
                 status=400,
             )
 
-        event_type = payload.get("event_type")
-        call_id = payload.get("call_id")
+        # -------------------------------------------------
+        # Get webhook information
+        # -------------------------------------------------
+
+        event_type = payload.get(
+            "event_type"
+        )
+
+        call_id = payload.get(
+            "call_id"
+        )
 
         if not call_id:
             return HttpResponse(
@@ -234,56 +306,101 @@ class HunarWebhookView(APIView):
                 status=400,
             )
 
+        # -------------------------------------------------
+        # Find interview
+        # -------------------------------------------------
+
         try:
             interview = Interview.objects.get(
                 call_id=call_id
             )
+
         except Interview.DoesNotExist:
             return HttpResponse(
                 "Interview not found",
                 status=404,
             )
 
-        # Store the complete webhook payload.
+        # -------------------------------------------------
+        # Store complete webhook payload
+        # -------------------------------------------------
+
         interview.raw_payload = payload
 
-        # Status information
+        # -------------------------------------------------
+        # Update call status
+        # -------------------------------------------------
+
         if payload.get("status"):
-            interview.status = payload["status"]
+            interview.status = payload[
+                "status"
+            ]
+
+        # -------------------------------------------------
+        # Update lifecycle status
+        # -------------------------------------------------
 
         if payload.get("lifecycle_status"):
             interview.lifecycle_status = payload[
                 "lifecycle_status"
             ]
 
-        # Call information
+        # -------------------------------------------------
+        # Update answered-by information
+        # -------------------------------------------------
+
         if payload.get("answered_by"):
             interview.answered_by = payload[
                 "answered_by"
             ]
+
+        # -------------------------------------------------
+        # Update call-ended-by information
+        # -------------------------------------------------
 
         if payload.get("call_ended_by"):
             interview.call_ended_by = payload[
                 "call_ended_by"
             ]
 
-        if payload.get("duration_seconds") is not None:
+        # -------------------------------------------------
+        # Update duration
+        # -------------------------------------------------
+
+        if payload.get(
+            "duration_seconds"
+        ) is not None:
             interview.duration_seconds = payload[
                 "duration_seconds"
             ]
 
-        # Recording
+        # -------------------------------------------------
+        # Update recording URL
+        # -------------------------------------------------
+
         if payload.get("recording_url"):
             interview.recording_url = payload[
                 "recording_url"
             ]
 
-        # AI result
-        if payload.get("result") is not None:
-            interview.result = payload["result"]
+        # -------------------------------------------------
+        # Update AI result
+        # -------------------------------------------------
 
-        # Save everything
+        if payload.get("result") is not None:
+            interview.result = payload[
+                "result"
+            ]
+
+        # -------------------------------------------------
+        # Save interview
+        # -------------------------------------------------
+
         interview.save()
+
+        # -------------------------------------------------
+        # Return success
+        # -------------------------------------------------
 
         return Response(
             {
